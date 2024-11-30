@@ -3,9 +3,11 @@ import fitz  # PyMuPDF
 import pytesseract
 from PIL import Image
 import io
+import argparse
+import re
 
 # 配置Tesseract路径（如果未加入系统PATH中）
-# pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
 def get_image_from_pdf(page):
     """从PDF页面中提取图像"""
@@ -61,9 +63,16 @@ def process_folder(folder_path, output_folder):
                 correct_pdf_orientation(input_pdf, output_pdf)
 
 if __name__ == "__main__":
-    # 输入和输出文件夹
-    input_folder = "path/to/your/input/folder"  # 修改为实际输入文件夹路径
-    output_folder = "path/to/your/output/folder"  # 修改为实际输出文件夹路径
+    # 设置命令行参数
+    parser = argparse.ArgumentParser(description="批量修复PDF页面方向")
+    parser.add_argument("input_folder", help="输入文件夹路径")
+    parser.add_argument("output_folder", help="输出文件夹路径")
+
+    # 解析命令行参数
+    args = parser.parse_args()
+
+    input_folder = args.input_folder
+    output_folder = args.output_folder
 
     if not os.path.exists(input_folder):
         print(f"输入文件夹不存在: {input_folder}")
