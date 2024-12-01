@@ -1,7 +1,7 @@
 import os
 import fitz  # PyMuPDF
 import pytesseract
-from PIL import Image
+from PIL import Image, ImageEnhance
 import io
 import argparse
 import re
@@ -15,37 +15,147 @@ def get_image_from_pdf(page):
     img = Image.open(io.BytesIO(pix.tobytes("png")))
     return img
 
+def preprocess_image(image):
+    """对图像进行预处理：针对潦草汉字的优化"""
+    # 确保图像有正确的DPI信息
+    dpi = 300
+    image.info['dpi'] = (dpi, dpi)
+    
+    # 计算新的尺寸，确保图像足够大以供识别
+    width = int(image.width * 1.5)  # 放大1.5倍
+    height = int(image.height * 1.5)
+    
+    # 使用高质量的重采样方法
+    image = image.convert('RGB')
+    image = image.resize((width, height), Image.Resampling.LANCZOS)
+    
+    # 增强对比度
+    contrast = ImageEnhance.Contrast(image)
+    image = contrast.enhance(2.0)  # 增加对比度
+    
+    # 增加锐度
+    sharpness = ImageEnhance.Sharpness(image)
+    image = sharpness.enhance(1.5)
+    
+    # 转换为灰度图像
+    image = image.convert('L')
+    
+    # 使用自适应阈值
+    threshold = 150  # 降低阈值以保留更多文字
+    image = image.point(lambda x: 0 if x < threshold else 255, '1')
+    
+    return image
+
 def detect_orientation(image):
     """使用OCR检测图像方向"""
     try:
-        osd = pytesseract.image_to_osd(image)
-        rotation = int(re.search(r'(?<=Rotate: )\d+', osd).group(0))
-        return rotation
+        # 优化OCR配置
+        custom_config = r'--oem 3 --psm 0 -l chi_sim ' \
+                       r'--dpi 300 ' \
+                       r'-c tessedit_do_invert=0 ' \
+                       r'-c tessedit_pageseg_mode=0 ' \
+                       r'-c textord_heavy_nr=0 ' \
+                       r'-c textord_min_linesize=1.5'
+        
+        # 转换为RGB模式（某些版本的Tesseract在处理二值图像时可能有问题）
+        if image.mode == '1':
+            image = image.convert('RGB')
+        
+        # 尝试多次检测
+        max_attempts = 3
+        rotations = []
+        
+        for _ in range(max_attempts):
+            try:
+                osd = pytesseract.image_to_osd(
+                    image, 
+                    config=custom_config,
+                    output_type=pytesseract.Output.DICT
+                )
+                rotation = int(osd.get('rotate', 0))
+                confidence = float(osd.get('orientation_conf', 0))
+                
+                if confidence > 1.0:  # 只记录置信度较高的结果
+                    rotations.append(rotation)
+            except Exception:
+                continue
+        
+        # 如果有有效的旋转结果，返回出现最多的角度
+        if rotations:
+            from collections import Counter
+            most_common = Counter(rotations).most_common(1)[0]
+            rotation_angle = most_common[0]
+            rotation_count = most_common[1]
+            
+            if rotation_count >= 2:  # 至少有2次相同的检测结果
+                print(f"检测到可信的旋转角度: {rotation_angle}度")
+                return rotation_angle
+        
+        print("未能确定可信的旋转角度，保持原方向")
+        return 0
+        
     except Exception as e:
         print(f"检测方向时出错: {e}")
-        return 0  # 默认无旋转
+        # 保存调试图像
+        try:
+            debug_path = f"debug_image_{hash(str(image))}.png"
+            image.save(debug_path)
+            print(f"已保存调试图像到: {debug_path}")
+        except Exception as save_error:
+            print(f"保存调试图像失败: {save_error}")
+        return 0
 
 def correct_pdf_orientation(input_pdf, output_pdf):
     """自动校正PDF页面方向"""
+    success_count = 0
+    fail_count = 0
+    fail_reasons = []
+
     try:
         doc = fitz.open(input_pdf)
-        for page_num in range(len(doc)):
+        total_pages = len(doc)
+        print(f"开始处理PDF文件，共 {total_pages} 页")
+        for page_num in range(total_pages):
+            print(f"正在处理第 {page_num + 1}/{total_pages} 页...")
             page = doc[page_num]
-            # 提取页面图像
-            image = get_image_from_pdf(page)
-            # 检测方向
-            rotation = detect_orientation(image)
-            # 根据检测结果旋转页面
-            if rotation == 90:
-                page.set_rotation(90)
-            elif rotation == 180:
-                page.set_rotation(180)
-            elif rotation == 270:
-                page.set_rotation(270)
+            try:
+                # 提取页面图像并预处理
+                image = get_image_from_pdf(page)
+                processed_image = preprocess_image(image)
+                processed_image.save(f"debug_page_{page_num+1}.png")  # 保存处理后的图片用于调试
+                # 检测方向
+                rotation = detect_orientation(processed_image)
+                
+                # 根据检测结果旋转页面
+                if rotation == 90:
+                    page.set_rotation(90)
+                    success_count += 1
+                    print(f"第{page_num + 1}页：旋转角度为90°")
+                elif rotation == 180:
+                    page.set_rotation(180)
+                    success_count += 1
+                    print(f"第{page_num + 1}页：旋转角度为180°")
+                elif rotation == 270:
+                    page.set_rotation(270)
+                    success_count += 1
+                    print(f"第{page_num + 1}页：旋转角度为270°")
+                else:
+                    print(f"第{page_num + 1}页：无需旋转")
+            except Exception as e:
+                fail_count += 1
+                fail_reasons.append(f"第{page_num + 1}页调整失败，原因: {e}")
+                print(f"第{page_num + 1}页调整失败，原因: {e}")
+
         # 保存校正后的PDF
         doc.save(output_pdf)
         doc.close()
-        print(f"校正完成: {output_pdf}")
+
+        # 输出最终结果
+        if success_count > 0:
+            print(f"校正完成: {output_pdf}")
+            print(f"成功调整 {success_count} 页，失败 {fail_count} 页")
+        else:
+            print(f"没有成功调整任何页面，失败 {fail_count} 页")
     except Exception as e:
         print(f"处理文件 {input_pdf} 时出错: {e}")
 
