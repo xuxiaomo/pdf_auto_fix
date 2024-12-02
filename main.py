@@ -12,6 +12,18 @@ import numpy as np
 API_KEY = "eHXu6KgWw18TNWxStKWWcwm2"
 SECRET_KEY = "H77fFvbXTmIJyvRydDNKKB9SThhCtCME"
 
+def singleton(cls):
+    """单例模式装饰器"""
+    _instance = {}
+    
+    def get_instance(*args, **kwargs):
+        if cls not in _instance:
+            _instance[cls] = cls(*args, **kwargs)
+        return _instance[cls]
+    
+    return get_instance
+
+@singleton
 class BaiduOCR:
     def __init__(self, api_key, secret_key):
         self.API_KEY = api_key
@@ -28,6 +40,136 @@ class BaiduOCR:
         }
         return str(requests.post(url, params=params).json().get("access_token"))
 
+    def webimage_api(self, img_str):
+        url = f"https://aip.baidubce.com/rest/2.0/ocr/v1/webimage?access_token={self.token}"
+
+        payload = {
+            "image": img_str,
+            "detect_direction": "true",
+        }
+
+        headers = {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Accept': 'application/json'
+        }
+        
+        response = requests.post(url, headers=headers, data=payload)
+        result = response.json()
+        return result
+
+    def webimage_loc_api(self, img_str):
+        url = f"https://aip.baidubce.com/rest/2.0/ocr/v1/webimage_loc?access_token={self.token}"
+
+        payload = {
+            "image": img_str,
+            "detect_direction": "true",
+        }   
+
+        headers = {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Accept': 'application/json'
+        }
+
+        response = requests.post(url, headers=headers, data=payload)
+        result = response.json()
+        return result
+
+    def general_basic_api(self, img_str):
+        url = f"https://aip.baidubce.com/rest/2.0/ocr/v1/general_basic?access_token={self.token}"
+
+        payload = {
+            "image": img_str,
+            "detect_direction": "true",
+        }
+
+        headers = {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Accept': 'application/json'
+        }
+
+        response = requests.post(url, headers=headers, data=payload)
+        result = response.json()
+        return result
+    
+    def general_api(self, img_str):
+        url = f"https://aip.baidubce.com/rest/2.0/ocr/v1/general?access_token={self.token}"
+
+        payload = {
+            "image": img_str,
+            "detect_direction": "true",
+        }
+
+        headers = {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Accept': 'application/json'
+        }
+
+        response = requests.post(url, headers=headers, data=payload)
+        result = response.json()
+        return result
+
+    def accurate_api(self, img_str):
+        url = f"https://aip.baidubce.com/rest/2.0/ocr/v1/accurate?access_token={self.token}"
+
+        payload = {
+            "image": img_str,
+            "detect_direction": "true",
+        }
+
+        headers = {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Accept': 'application/json'
+        }
+
+        response = requests.post(url, headers=headers, data=payload)
+        result = response.json()
+        return result
+
+    def accurate_basic_api(self, img_str):
+        url = f"https://aip.baidubce.com/rest/2.0/ocr/v1/accurate_basic?access_token={self.token}"
+
+        payload = {
+            "image": img_str,
+            "detect_direction": "true",
+        }
+
+        headers = {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Accept': 'application/json'
+        }
+
+        response = requests.post(url, headers=headers, data=payload)
+        result = response.json()
+        return result
+
+    def auto_switch_api(self, image):
+        img_str = self._image_to_base64(image)
+
+        api_list = [
+            # self.general_basic_api,
+            # self.general_api,
+            # self.accurate_basic_api,
+            # self.accurate_api,
+            self.webimage_api,
+            self.webimage_loc_api,
+        ]
+
+        for api in api_list:
+            result = api(img_str)
+            if result.get("direction") is not None:
+                return result
+            else:
+                print(f"接口不可用: {api.__name__}, Error Code: {result.get('error_code')}, Error Message: {result.get('error_msg')}, 使用下一个接口")
+                continue
+
+        raise Exception("没有可用的OCR接口")
+
+    def _image_to_base64(self, image):
+        buffered = io.BytesIO()
+        image.save(buffered, format="JPEG", quality=95)
+        img_str = base64.b64encode(buffered.getvalue()).decode()
+        return img_str
+
 def get_image_from_pdf(page):
     """从PDF页面中提取图像"""
     pix = page.get_pixmap()
@@ -36,55 +178,22 @@ def get_image_from_pdf(page):
 
 def detect_orientation(image, page_num):
     """使用百度OCR检测图像方向"""
-    global ocr
-    if 'ocr' not in globals():
-        ocr = BaiduOCR(API_KEY, SECRET_KEY)
-        
-    # 将PIL图像转换为字节流
-    buffered = io.BytesIO()
-    image.save(buffered, format="JPEG", quality=95)
-    img_str = base64.b64encode(buffered.getvalue()).decode()
     
-    # API URL
-    url = f"https://aip.baidubce.com/rest/2.0/ocr/v1/webimage_loc?access_token={ocr.token}"
+    ocr = BaiduOCR(API_KEY, SECRET_KEY)
+    result = ocr.auto_switch_api(image)
     
-    try:
-        # 请求参数
-        data = {
-            'image': img_str,
-            'detect_direction': 'true',  # 检测方向
-            'poly_location': 'false',    # 不需要多边形顶点
-            'probability': 'false'       # 不需要置信度
+    if 'direction' in result:
+        # 百度OCR返回的direction: 0:正向，1:逆时针90度，2:逆时针180度，3:逆时针270度
+        direction_map = {
+            0: 0,
+            1: 90,
+            2: 180,
+            3: 270
         }
-        
-        headers = {
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'Accept': 'application/json'
-        }
-        
-        # 发送请求
-        response = requests.post(url, headers=headers, data=data)
-        result = response.json()
-        
-        if 'direction' in result:
-            # 百度OCR返回的direction: 0:正向，1:逆时针90度，2:逆时针180度，3:逆时针270度
-            direction_map = {
-                0: 0,
-                1: 90,
-                2: 180,
-                3: 270
-            }
-            angle = direction_map.get(result['direction'], 0)
-            print(f"第 {page_num + 1} 页：检测到方向 {angle}°")
-            return angle, 1.0
-            
-        else:
-            print(f"第 {page_num + 1} 页：未检测到方向信息")
-            return 0, 0.0
-            
-    except Exception as e:
-        print(f"第 {page_num + 1} 页：方向检测失败 - {str(e)}")
-        return 0, 0.0
+        angle = direction_map.get(result['direction'], 0)
+        return angle, 1.0
+    else:
+        raise Exception("未检测到方向信息")
 
 def correct_pdf_orientation(input_pdf, output_pdf):
     """自动校正PDF页面方向"""
