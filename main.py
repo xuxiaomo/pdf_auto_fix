@@ -311,7 +311,9 @@ if __name__ == "__main__":
             sys.exit(1)
         
         if not config['output_folder']:
-            config['output_folder'] = os.path.join(os.path.dirname(config['input_folder']), 'output')
+            # 修改为与input_folder平级的output目录
+            input_parent = os.path.dirname(config['input_folder'])  # 获取input的父目录
+            config['output_folder'] = os.path.join(input_parent, 'output').replace('/', '\\')
         
         if not os.path.exists(config['input_folder']):
             logging.error(f"输入文件夹不存在: {config['input_folder']}")

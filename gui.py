@@ -5,6 +5,7 @@ import os
 import threading
 import queue
 import logging
+import yaml
 
 class IORedirector(object):
     def __init__(self, text_widget):
@@ -82,6 +83,9 @@ class PDFOrientationGUI:
         self.root.title("PDF方向修正工具")
         self.root.geometry("800x600")
         
+        # 配置文件路径
+        self.config_file = "config.yaml"
+        
         if hasattr(sys, 'getwindowsversion'):
             self.root.option_add('*font', ('Microsoft YaHei UI', 9))
         
@@ -89,10 +93,14 @@ class PDFOrientationGUI:
         self.main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         
         self.create_input_fields()
-        
         self.create_log_area()
-        
         self.create_buttons()
+        
+        # 加载保存的配置
+        self.load_config()
+        
+        # 在窗口关闭时保存配置
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         
         root.columnconfigure(0, weight=1)
         root.rowconfigure(0, weight=1)
@@ -106,6 +114,42 @@ class PDFOrientationGUI:
         )
         self.progress.grid(row=7, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=5)
         self.progress.grid_remove()
+
+    def load_config(self):
+        """加载保存的配置"""
+        try:
+            if os.path.exists(self.config_file):
+                with open(self.config_file, 'r', encoding='utf-8') as f:
+                    config = yaml.safe_load(f)
+                    if config:  # 确保配置不为空
+                        self.api_key_var.set(config.get('api_key', ''))
+                        self.secret_key_var.set(config.get('secret_key', ''))
+                        self.input_folder_var.set(config.get('input_folder', ''))
+                        self.output_folder_var.set(config.get('output_folder', ''))
+                        self.debug_var.set(config.get('debug', False))
+        except Exception as e:
+            logging.error(f"加载配置文件失败: {e}")
+
+    def save_config(self):
+        """保存当前配置"""
+        try:
+            config = {
+                'api_key': self.api_key_var.get(),
+                'secret_key': self.secret_key_var.get(),
+                'input_folder': self.input_folder_var.get(),
+                'output_folder': self.output_folder_var.get(),
+                'debug': self.debug_var.get()
+            }
+            with open(self.config_file, 'w', encoding='utf-8') as f:
+                yaml.safe_dump(config, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+            logging.info("配置已保存")
+        except Exception as e:
+            logging.error(f"保存配置文件失败: {e}")
+
+    def on_closing(self):
+        """窗口关闭时的处理"""
+        self.save_config()
+        self.root.destroy()
 
     def create_input_fields(self):
         # API Key
@@ -166,12 +210,21 @@ class PDFOrientationGUI:
     def browse_input_folder(self):
         folder = filedialog.askdirectory()
         if folder:
+            # 确保使用反斜杠
+            folder = folder.replace('/', '\\')
             self.input_folder_var.set(folder)
+            # 如果输出文件夹为空，设置为与input平级的output目录
+            if not self.output_folder_var.get():
+                input_parent = os.path.dirname(folder)  # 获取input的父目录
+                output_folder = os.path.join(input_parent, 'output').replace('/', '\\')
+                self.output_folder_var.set(output_folder)
+            self.save_config()  # 自动保存配置
 
     def browse_output_folder(self):
         folder = filedialog.askdirectory()
         if folder:
             self.output_folder_var.set(folder)
+            self.save_config()  # 自动保存配置
 
     def clear_log(self):
         self.log_text.delete('1.0', tk.END)
