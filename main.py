@@ -40,93 +40,10 @@ class BaiduOCR:
         }
         return str(requests.post(url, params=params).json().get("access_token"))
 
-    def webimage_api(self, img_str):
-        url = f"https://aip.baidubce.com/rest/2.0/ocr/v1/webimage?access_token={self.token}"
+    def get_result_from_api(self, image, api_name):
+        img_str = self._image_to_base64(image)
 
-        payload = {
-            "image": img_str,
-            "detect_direction": "true",
-        }
-
-        headers = {
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'Accept': 'application/json'
-        }
-        
-        response = requests.post(url, headers=headers, data=payload)
-        result = response.json()
-        return result
-
-    def webimage_loc_api(self, img_str):
-        url = f"https://aip.baidubce.com/rest/2.0/ocr/v1/webimage_loc?access_token={self.token}"
-
-        payload = {
-            "image": img_str,
-            "detect_direction": "true",
-        }   
-
-        headers = {
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'Accept': 'application/json'
-        }
-
-        response = requests.post(url, headers=headers, data=payload)
-        result = response.json()
-        return result
-
-    def general_basic_api(self, img_str):
-        url = f"https://aip.baidubce.com/rest/2.0/ocr/v1/general_basic?access_token={self.token}"
-
-        payload = {
-            "image": img_str,
-            "detect_direction": "true",
-        }
-
-        headers = {
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'Accept': 'application/json'
-        }
-
-        response = requests.post(url, headers=headers, data=payload)
-        result = response.json()
-        return result
-    
-    def general_api(self, img_str):
-        url = f"https://aip.baidubce.com/rest/2.0/ocr/v1/general?access_token={self.token}"
-
-        payload = {
-            "image": img_str,
-            "detect_direction": "true",
-        }
-
-        headers = {
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'Accept': 'application/json'
-        }
-
-        response = requests.post(url, headers=headers, data=payload)
-        result = response.json()
-        return result
-
-    def accurate_api(self, img_str):
-        url = f"https://aip.baidubce.com/rest/2.0/ocr/v1/accurate?access_token={self.token}"
-
-        payload = {
-            "image": img_str,
-            "detect_direction": "true",
-        }
-
-        headers = {
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'Accept': 'application/json'
-        }
-
-        response = requests.post(url, headers=headers, data=payload)
-        result = response.json()
-        return result
-
-    def accurate_basic_api(self, img_str):
-        url = f"https://aip.baidubce.com/rest/2.0/ocr/v1/accurate_basic?access_token={self.token}"
+        url = f"https://aip.baidubce.com/rest/2.0/ocr/v1/{api_name}?access_token={self.token}"
 
         payload = {
             "image": img_str,
@@ -143,19 +60,17 @@ class BaiduOCR:
         return result
 
     def auto_switch_api(self, image):
-        img_str = self._image_to_base64(image)
-
         api_list = [
-            # self.general_basic_api,
-            # self.general_api,
-            # self.accurate_basic_api,
-            # self.accurate_api,
-            self.webimage_api,
-            self.webimage_loc_api,
+            "general_basic",
+            "general",
+            "accurate_basic",
+            "accurate",
+            "webimage",
+            "webimage_loc",
         ]
 
         for api in api_list:
-            result = api(img_str)
+            result = self.get_result_from_api(image, api)
             if result.get("direction") is not None:
                 return result
             else:
