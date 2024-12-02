@@ -1,16 +1,24 @@
-import os
-import fitz  # PyMuPDF
-import requests
-import base64
-from PIL import Image
 import io
+import os
+import sys
+import logging
 import argparse
-import re
-import numpy as np
+import base64
 
-# 百度OCR API密钥
-API_KEY = "eHXu6KgWw18TNWxStKWWcwm2"
-SECRET_KEY = "H77fFvbXTmIJyvRydDNKKB9SThhCtCME"
+import fitz  # PyMuPDF
+import yaml
+import requests
+from PIL import Image
+
+
+def setup_logging(debug=False):
+    """配置日志记录器"""
+    level = logging.DEBUG if debug else logging.INFO
+    logging.basicConfig(
+        level=level,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
 
 def singleton(cls):
     """单例模式装饰器"""
@@ -74,7 +82,7 @@ class BaiduOCR:
             if result.get("direction") is not None:
                 return result
             else:
-                print(f"接口不可用: {api.__name__}, Error Code: {result.get('error_code')}, Error Message: {result.get('error_msg')}, 使用下一个接口")
+                logging.warning(f"接口不可用: {api}, Error Code: {result.get('error_code')}, Error Message: {result.get('error_msg')}, 使用下一个接口")
                 continue
 
         raise Exception("没有可用的OCR接口")
@@ -91,10 +99,9 @@ def get_image_from_pdf(page):
     img = Image.open(io.BytesIO(pix.tobytes("png")))
     return img
 
-def detect_orientation(image, page_num):
+def detect_orientation(image, config):
     """使用百度OCR检测图像方向"""
-    
-    ocr = BaiduOCR(API_KEY, SECRET_KEY)
+    ocr = BaiduOCR(config['api_key'], config['secret_key'])
     result = ocr.auto_switch_api(image)
     
     if 'direction' in result:
@@ -110,12 +117,11 @@ def detect_orientation(image, page_num):
     else:
         raise Exception("未检测到方向信息")
 
-def correct_pdf_orientation(input_pdf, output_pdf):
+def correct_pdf_orientation(input_pdf, output_pdf, config):
     """自动校正PDF页面方向"""
     success_count = 0
     fail_count = 0
 
-    # 创建以输入文件名命名的调试目录
     input_filename = os.path.splitext(os.path.basename(input_pdf))[0]
     temp_dir = os.path.join(os.path.dirname(__file__), 'temp')
     debug_dir = os.path.join(temp_dir, input_filename)
@@ -123,34 +129,35 @@ def correct_pdf_orientation(input_pdf, output_pdf):
 
     doc = fitz.open(input_pdf)
     total_pages = len(doc)
-    print(f"开始处理PDF文件，共 {total_pages} 页")
+    logging.info(f"开始处理PDF文件，共 {total_pages} 页")
     
     for page_num in range(total_pages):
-        print(f"正在处理第 {page_num + 1}/{total_pages} 页...")
+        logging.info(f"正在处理第 {page_num + 1}/{total_pages} 页...")
         page = doc[page_num]
         
         # 提取页面图像并预处理
         image = get_image_from_pdf(page)
-        image.save(os.path.join(debug_dir, f"page_{page_num + 1}.png"))
+        if config.get('debug', False):
+            image.save(os.path.join(debug_dir, f"page_{page_num + 1}.png"))
         
         # 获取旋转角度和置信度
-        rotation, confidence = detect_orientation(image, page_num)
+        rotation, confidence = detect_orientation(image, config)
         
         # 根据检测结果旋转页面
         if rotation == 90:
             page.set_rotation(90)
             success_count += 1
-            print(f"第{page_num + 1}页：旋转角度为90° (置信度: {confidence:.2f})")
+            logging.info(f"第{page_num + 1}页：旋转角度为90° (置信度: {confidence:.2f})")
         elif rotation == 180:
             page.set_rotation(180)
             success_count += 1
-            print(f"第{page_num + 1}页：旋转角度为180° (置信度: {confidence:.2f})")
+            logging.info(f"第{page_num + 1}页：旋转角度为180° (置信度: {confidence:.2f})")
         elif rotation == 270:
             page.set_rotation(270)
             success_count += 1
-            print(f"第{page_num + 1}页：旋转角度为270° (置信度: {confidence:.2f})")
+            logging.info(f"第{page_num + 1}页：旋转角度为270° (置信度: {confidence:.2f})")
         else:
-            print(f"第{page_num + 1}页：无需旋转 (置信度: {confidence:.2f})")
+            logging.info(f"第{page_num + 1}页：无需旋转 (置信度: {confidence:.2f})")
 
     # 保存校正后的PDF
     doc.save(output_pdf)
@@ -158,12 +165,12 @@ def correct_pdf_orientation(input_pdf, output_pdf):
 
     # 输出最终结果
     if success_count > 0:
-        print(f"校正完成: {output_pdf}")
-        print(f"成功调整 {success_count} 页，失败 {fail_count} 页")
+        logging.info(f"校正完成: {output_pdf}")
+        logging.info(f"成功调整 {success_count} 页，失败 {fail_count} 页")
     else:
-        print(f"没有成功调整任何页面，失败 {fail_count} 页")
+        logging.warning(f"没有成功调整任何页面，失败 {fail_count} 页")
 
-def process_folder(folder_path, output_folder):
+def process_folder(folder_path, output_folder, config):
     """递归扫描文件夹并修复所有PDF文件"""
     for root, _, files in os.walk(folder_path):
         for file in files:
@@ -173,24 +180,78 @@ def process_folder(folder_path, output_folder):
                 output_dir = os.path.join(output_folder, relative_path)
                 os.makedirs(output_dir, exist_ok=True)
                 output_pdf = os.path.join(output_dir, file)
-                print(f"正在处理文件: {input_pdf}")
-                correct_pdf_orientation(input_pdf, output_pdf)
+                logging.info(f"正在处理文件: {input_pdf}")
+                correct_pdf_orientation(input_pdf, output_pdf, config)
+
+def load_config(config_file=None):
+    """加载配置文件"""
+    default_config = {
+        'api_key': None,
+        'secret_key': None,
+        'input_folder': None,
+        'output_folder': None,
+        'debug': False
+    }
+    
+    if config_file:
+        try:
+            with open(config_file, 'r', encoding='utf-8') as f:
+                config = yaml.safe_load(f)
+                default_config.update(config)
+        except Exception as e:
+            logging.error(f"加载配置文件失败: {str(e)}")
+    
+    return default_config
+
+def parse_arguments():
+    parser = argparse.ArgumentParser(description="批量修复PDF页面方向")
+    parser.add_argument("--config", help="配置文件路径")
+    parser.add_argument("--api-key", help="百度OCR API Key")
+    parser.add_argument("--secret-key", help="百度OCR Secret Key")
+    parser.add_argument("--input-folder", help="输入文件夹路径")
+    parser.add_argument("--output-folder", help="输出文件夹路径")
+    parser.add_argument("--debug", action="store_true", help="启用调试模式")
+    
+    return parser.parse_args()
 
 if __name__ == "__main__":
-    # 设置命令行参数
-    parser = argparse.ArgumentParser(description="批量修复PDF页面方向")
-    parser.add_argument("input_folder", help="输入文件夹路径")
-    parser.add_argument("output_folder", help="输出文件夹路径")
-
-    # 解析命令行参数
-    args = parser.parse_args()
-
-    input_folder = args.input_folder
-    output_folder = args.output_folder
-
-    if not os.path.exists(input_folder):
-        print(f"输入文件夹不存在: {input_folder}")
-    else:
-        os.makedirs(output_folder, exist_ok=True)
-        process_folder(input_folder, output_folder)
-        print("所有PDF文件已处理完成。")
+    args = parse_arguments()
+    
+    # 加载配置
+    config = load_config(args.config)
+    
+    # 设置日志级别
+    setup_logging(config.get('debug', False))
+    
+    # 命令行参数优先级高于配置文件
+    if args.api_key:
+        config['api_key'] = args.api_key
+    if args.secret_key:
+        config['secret_key'] = args.secret_key
+    if args.input_folder:
+        config['input_folder'] = args.input_folder
+    if args.output_folder:
+        config['output_folder'] = args.output_folder
+    if args.debug:
+        config['debug'] = True
+        setup_logging(True)  # 重新设置日志级别
+    
+    # 验证必要参数
+    if not config['api_key'] or not config['secret_key']:
+        logging.error("错误：必须提供百度OCR的API Key和Secret Key")
+        sys.exit(1)
+    
+    if not config['input_folder']:
+        logging.error("错误：必须指定输入文件夹路径")
+        sys.exit(1)
+    
+    if not config['output_folder']:
+        config['output_folder'] = os.path.join(os.path.dirname(config['input_folder']), 'output')
+    
+    if not os.path.exists(config['input_folder']):
+        logging.error(f"输入文件夹不存在: {config['input_folder']}")
+        sys.exit(1)
+    
+    os.makedirs(config['output_folder'], exist_ok=True)
+    process_folder(config['input_folder'], config['output_folder'], config)
+    logging.info("所有PDF文件已处理完成。")

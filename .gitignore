@@ -166,3 +166,15 @@ cython_debug/
 
 # Ignore temp directory
 temp/
+
+# Ignore Input and Output folder
+input/
+output/
+
+# 忽略实际的配置文件
+config.yaml
+
+# 但不忽略模板文件
+!config.yaml.template
+
+

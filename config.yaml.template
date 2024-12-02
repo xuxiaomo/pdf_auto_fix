@@ -1,0 +1,10 @@
+# 百度OCR API配置
+api_key: YOUR_API_KEY_HERE
+secret_key: YOUR_SECRET_KEY_HERE
+
+# 文件夹路径配置
+input_folder: ./input
+output_folder: ./output
+
+# 调试模式
+debug: true 
