@@ -4,6 +4,8 @@ import sys
 import logging
 import argparse
 import base64
+import time
+from threading import Lock
 
 import fitz  # PyMuPDF
 import yaml
@@ -14,11 +16,43 @@ from PIL import Image
 def setup_logging(debug=False):
     """配置日志记录器"""
     level = logging.DEBUG if debug else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format='%(asctime)s - %(levelname)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    )
+    
+    # 自定义日志格式
+    class CustomFormatter(logging.Formatter):
+        """自定义日志格式器"""
+        grey = "\x1b[38;21m"
+        blue = "\x1b[34;21m"
+        yellow = "\x1b[33;21m"
+        red = "\x1b[31;21m"
+        bold_red = "\x1b[31;1m"
+        reset = "\x1b[0m"
+
+        format_str = "%(asctime)s - %(levelname)s - %(message)s"
+
+        FORMATS = {
+            logging.DEBUG: grey + format_str + reset,
+            logging.INFO: blue + format_str + reset,
+            logging.WARNING: yellow + format_str + reset,
+            logging.ERROR: red + format_str + reset,
+            logging.CRITICAL: bold_red + format_str + reset
+        }
+
+        def format(self, record):
+            log_fmt = self.FORMATS.get(record.levelno)
+            formatter = logging.Formatter(log_fmt, datefmt='%H:%M:%S')
+            return formatter.format(record)
+
+    # 配置日志处理器
+    handler = logging.StreamHandler()
+    handler.setFormatter(CustomFormatter())
+    
+    # 配置根日志记录器
+    root_logger = logging.getLogger()
+    root_logger.setLevel(level)
+    
+    # 清除现有的处理器
+    root_logger.handlers = []
+    root_logger.addHandler(handler)
 
 def singleton(cls):
     """单例模式装饰器"""
@@ -31,12 +65,37 @@ def singleton(cls):
     
     return get_instance
 
+class RateLimiter:
+    def __init__(self, rate=2):  # rate: 每秒允许的请求数
+        self.rate = rate
+        self.tokens = rate  # 当前可用令牌数
+        self.last_update = time.time()
+        self.lock = Lock()
+    
+    def acquire(self):
+        with self.lock:
+            now = time.time()
+            # 计算从上次更新到现在应该添加的令牌
+            elapsed = now - self.last_update
+            self.tokens = min(self.rate, self.tokens + elapsed * self.rate)
+            self.last_update = now
+            
+            if self.tokens < 1:
+                # 需要等待的时间
+                wait_time = (1 - self.tokens) / self.rate
+                time.sleep(wait_time)
+                self.tokens = 0
+                self.last_update = time.time()
+            else:
+                self.tokens -= 1
+
 @singleton
 class BaiduOCR:
     def __init__(self, api_key, secret_key):
         self.API_KEY = api_key
         self.SECRET_KEY = secret_key
         self.token = self.get_access_token()
+        self.rate_limiter = RateLimiter(rate=2)  # 限制2 QPS
     
     def get_access_token(self):
         """获取百度AI的access_token"""
@@ -49,8 +108,10 @@ class BaiduOCR:
         return str(requests.post(url, params=params).json().get("access_token"))
 
     def get_result_from_api(self, image, api_name):
+        # 在发送请求前获取令牌
+        self.rate_limiter.acquire()
+        
         img_str = self._image_to_base64(image)
-
         url = f"https://aip.baidubce.com/rest/2.0/ocr/v1/{api_name}?access_token={self.token}"
 
         payload = {
@@ -122,42 +183,37 @@ def correct_pdf_orientation(input_pdf, output_pdf, config):
     success_count = 0
     fail_count = 0
 
-    input_filename = os.path.splitext(os.path.basename(input_pdf))[0]
-    temp_dir = os.path.join(os.path.dirname(__file__), 'temp')
-    debug_dir = os.path.join(temp_dir, input_filename)
-    os.makedirs(debug_dir, exist_ok=True)
-
     doc = fitz.open(input_pdf)
     total_pages = len(doc)
-    logging.info(f"开始处理PDF文件，共 {total_pages} 页")
+    
+    if total_pages == 0:
+        logging.warning("PDF文件为空")
+        doc.close()
+        return
+        
+    logging.info(f"PDF文件共 {total_pages} 页")
     
     for page_num in range(total_pages):
-        logging.info(f"正在处理第 {page_num + 1}/{total_pages} 页...")
-        page = doc[page_num]
-        
-        # 提取页面图像并预处理
-        image = get_image_from_pdf(page)
-        if config.get('debug', False):
-            image.save(os.path.join(debug_dir, f"page_{page_num + 1}.png"))
-        
-        # 获取旋转角度和置信度
-        rotation, confidence = detect_orientation(image, config)
-        
-        # 根据检测结果旋转页面
-        if rotation == 90:
-            page.set_rotation(90)
-            success_count += 1
-            logging.info(f"第{page_num + 1}页：旋转角度为90° (置信度: {confidence:.2f})")
-        elif rotation == 180:
-            page.set_rotation(180)
-            success_count += 1
-            logging.info(f"第{page_num + 1}页：旋转角度为180° (置信度: {confidence:.2f})")
-        elif rotation == 270:
-            page.set_rotation(270)
-            success_count += 1
-            logging.info(f"第{page_num + 1}页：旋转角度为270° (置信度: {confidence:.2f})")
-        else:
-            logging.info(f"第{page_num + 1}页：无需旋转 (置信度: {confidence:.2f})")
+        try:
+            page = doc[page_num]
+            
+            # 提取页面图像并预处理
+            image = get_image_from_pdf(page)
+            
+            # 获取旋转角度和置信度
+            rotation, confidence = detect_orientation(image, config)
+            
+            # 根据检测结果旋转页面
+            if rotation != 0:
+                page.set_rotation(rotation)
+                success_count += 1
+                logging.info(f"第 {page_num + 1} 页: 旋转 {rotation}° (置信度: {confidence:.2f})")
+            else:
+                logging.debug(f"第 {page_num + 1} 页: 无需旋转 (置信度: {confidence:.2f})")
+                
+        except Exception as e:
+            fail_count += 1
+            logging.error(f"处理第 {page_num + 1} 页时出错: {str(e)}")
 
     # 保存校正后的PDF
     doc.save(output_pdf)
@@ -170,18 +226,26 @@ def correct_pdf_orientation(input_pdf, output_pdf, config):
     else:
         logging.warning(f"没有成功调整任何页面，失败 {fail_count} 页")
 
-def process_folder(folder_path, output_folder, config):
+def process_folder(folder_path, output_folder, config, progress_callback=None):
     """递归扫描文件夹并修复所有PDF文件"""
+    # 首先统计总文件数
+    total_files = sum(1 for root, _, files in os.walk(folder_path) 
+                     for file in files if file.lower().endswith(".pdf"))
+    processed_files = 0
+    
     for root, _, files in os.walk(folder_path):
         for file in files:
             if file.lower().endswith(".pdf"):
-                input_pdf = os.path.join(root, file)
-                relative_path = os.path.relpath(root, folder_path)
-                output_dir = os.path.join(output_folder, relative_path)
+                input_pdf = os.path.abspath(os.path.join(root, file))
+                output_dir = os.path.abspath(output_folder)
                 os.makedirs(output_dir, exist_ok=True)
                 output_pdf = os.path.join(output_dir, file)
                 logging.info(f"正在处理文件: {input_pdf}")
                 correct_pdf_orientation(input_pdf, output_pdf, config)
+                
+                processed_files += 1
+                if progress_callback:
+                    progress_callback(processed_files, total_files)
 
 def load_config(config_file=None):
     """加载配置文件"""
@@ -215,43 +279,47 @@ def parse_arguments():
     return parser.parse_args()
 
 if __name__ == "__main__":
-    args = parse_arguments()
-    
-    # 加载配置
-    config = load_config(args.config)
-    
-    # 设置日志级别
-    setup_logging(config.get('debug', False))
-    
-    # 命令行参数优先级高于配置文件
-    if args.api_key:
-        config['api_key'] = args.api_key
-    if args.secret_key:
-        config['secret_key'] = args.secret_key
-    if args.input_folder:
-        config['input_folder'] = args.input_folder
-    if args.output_folder:
-        config['output_folder'] = args.output_folder
-    if args.debug:
-        config['debug'] = True
-        setup_logging(True)  # 重新设置日志级别
-    
-    # 验证必要参数
-    if not config['api_key'] or not config['secret_key']:
-        logging.error("错误：必须提供百度OCR的API Key和Secret Key")
-        sys.exit(1)
-    
-    if not config['input_folder']:
-        logging.error("错误：必须指定输入文件夹路径")
-        sys.exit(1)
-    
-    if not config['output_folder']:
-        config['output_folder'] = os.path.join(os.path.dirname(config['input_folder']), 'output')
-    
-    if not os.path.exists(config['input_folder']):
-        logging.error(f"输入文件夹不存在: {config['input_folder']}")
-        sys.exit(1)
-    
-    os.makedirs(config['output_folder'], exist_ok=True)
-    process_folder(config['input_folder'], config['output_folder'], config)
-    logging.info("所有PDF文件已处理完成。")
+    if len(sys.argv) > 1:  # 如果有命令行参数，使用命令行模式
+        args = parse_arguments()
+        
+        # 加载配置
+        config = load_config(args.config)
+        
+        # 设置日志级别
+        setup_logging(config.get('debug', False))
+        
+        # 命令行参数优先级高于配置文件
+        if args.api_key:
+            config['api_key'] = args.api_key
+        if args.secret_key:
+            config['secret_key'] = args.secret_key
+        if args.input_folder:
+            config['input_folder'] = args.input_folder
+        if args.output_folder:
+            config['output_folder'] = args.output_folder
+        if args.debug:
+            config['debug'] = True
+            setup_logging(True)  # 重新设置日志级别
+        
+        # 验证必要参数
+        if not config['api_key'] or not config['secret_key']:
+            logging.error("错误：必须提供百度OCR的API Key和Secret Key")
+            sys.exit(1)
+        
+        if not config['input_folder']:
+            logging.error("错误：必须指定输入文件夹路径")
+            sys.exit(1)
+        
+        if not config['output_folder']:
+            config['output_folder'] = os.path.join(os.path.dirname(config['input_folder']), 'output')
+        
+        if not os.path.exists(config['input_folder']):
+            logging.error(f"输入文件夹不存在: {config['input_folder']}")
+            sys.exit(1)
+        
+        os.makedirs(config['output_folder'], exist_ok=True)
+        process_folder(config['input_folder'], config['output_folder'], config)
+        logging.info("所有PDF文件已处理完成。")
+    else:  # 如果没有命令行参数，启动GUI
+        from gui import main
+        main()
