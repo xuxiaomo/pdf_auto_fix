@@ -90,20 +90,33 @@ class RateLimiter:
                 self.tokens -= 1
 
 @singleton
-class BaiduOCR:
+class PDFRotator:
     def __init__(self, api_key, secret_key):
-        self.API_KEY = api_key
-        self.SECRET_KEY = secret_key
+        self.api_key = api_key
+        self.secret_key = secret_key
         self.token = self.get_access_token()
-        self.rate_limiter = RateLimiter(rate=2)  # 限制2 QPS
-    
+        self.rate_limiter = RateLimiter(rate=2)
+        # 在初始化时定义可用的API列表和失败计数器
+        self.available_api_list = [
+            "handwriting",
+            "general_basic",
+            "general",
+            "accurate_basic", 
+            "accurate",
+            "webimage",
+        ]
+        # 初始化失败计数器字典
+        self.api_fail_count = {api: 0 for api in self.available_api_list}
+        # 设置最大失败次数
+        self.max_fail_count = 3
+
     def get_access_token(self):
         """获取百度AI的access_token"""
         url = "https://aip.baidubce.com/oauth/2.0/token"
         params = {
             "grant_type": "client_credentials", 
-            "client_id": self.API_KEY, 
-            "client_secret": self.SECRET_KEY
+            "client_id": self.api_key, 
+            "client_secret": self.secret_key
         }
         return str(requests.post(url, params=params).json().get("access_token"))
 
@@ -129,23 +142,22 @@ class BaiduOCR:
         return result
 
     def auto_switch_api(self, image):
-        api_list = [
-            "general_basic",
-            "general",
-            "accurate_basic",
-            "accurate",
-            "webimage",
-            "webimage_loc",
-        ]
-
-        for api in api_list:
+        for api in self.available_api_list:
             result = self.get_result_from_api(image, api)
             if result.get("direction") is not None:
+                # 成功时重置失败计数
+                self.api_fail_count[api] = 0
                 return result
             else:
-                logging.warning(f"接口不可用: {api}, Error Code: {result.get('error_code')}, Error Message: {result.get('error_msg')}, 使用下一个接口")
-                continue
-
+                logging.warning(f"接口不可用: {api}, Error Code: {result.get('error_code')}, Error Message: {result.get('error_msg')}")
+                self.api_fail_count[api] += 1
+            
+            # 检查失败次数是否达到上限
+            if self.api_fail_count[api] >= self.max_fail_count:
+                logging.warning(f"接口 {api} 连续失败 {self.max_fail_count} 次，从可用列表中移除")
+                self.available_api_list.remove(api)
+                del self.api_fail_count[api]
+        
         raise Exception("没有可用的OCR接口")
 
     def _image_to_base64(self, image):
@@ -162,7 +174,7 @@ def get_image_from_pdf(page):
 
 def detect_orientation(image, config):
     """使用百度OCR检测图像方向"""
-    ocr = BaiduOCR(config['api_key'], config['secret_key'])
+    ocr = PDFRotator(config['api_key'], config['secret_key'])
     result = ocr.auto_switch_api(image)
     
     if 'direction' in result:
@@ -197,7 +209,7 @@ def correct_pdf_orientation(input_pdf, output_pdf, config):
         try:
             page = doc[page_num]
             
-            # 提取页面图像并预处理
+            # 提取页面图像
             image = get_image_from_pdf(page)
             
             # 获取旋转角度和置信度
