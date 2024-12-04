@@ -190,6 +190,36 @@ def detect_orientation(image, config):
     else:
         raise Exception("未检测到方向信息")
 
+class ProcessStats:
+    """处理统计类"""
+    def __init__(self):
+        self.total_files = 0
+        self.processed_files = 0
+        self.total_pages = 0
+        self.rotated_pages = 0
+        self.failed_pages = 0
+        self.failed_files = 0
+
+    def add_file_result(self, pages, rotated, failed):
+        """添加单个文件的处理结果"""
+        self.total_pages += pages
+        self.rotated_pages += rotated
+        self.failed_pages += failed
+        self.processed_files += 1
+        if failed > 0:
+            self.failed_files += 1
+
+    def get_summary(self):
+        """获取处理汇总信息"""
+        return {
+            "total_files": self.total_files,
+            "processed_files": self.processed_files,
+            "total_pages": self.total_pages,
+            "rotated_pages": self.rotated_pages,
+            "failed_pages": self.failed_pages,
+            "failed_files": self.failed_files
+        }
+
 def correct_pdf_orientation(input_pdf, output_pdf, config):
     """自动校正PDF页面方向"""
     success_count = 0
@@ -201,7 +231,7 @@ def correct_pdf_orientation(input_pdf, output_pdf, config):
     if total_pages == 0:
         logging.warning("PDF文件为空")
         doc.close()
-        return
+        return total_pages, success_count, fail_count
         
     logging.info(f"PDF文件共 {total_pages} 页")
     
@@ -237,27 +267,52 @@ def correct_pdf_orientation(input_pdf, output_pdf, config):
         logging.info(f"成功调整 {success_count} 页，失败 {fail_count} 页")
     else:
         logging.warning(f"没有成功调整任何页面，失败 {fail_count} 页")
-
-def process_folder(folder_path, output_folder, config, progress_callback=None):
-    """递归扫描文件夹并修复所有PDF文件"""
-    # 首先统计总文件数
-    total_files = sum(1 for root, _, files in os.walk(folder_path) 
-                     for file in files if file.lower().endswith(".pdf"))
-    processed_files = 0
     
-    for root, _, files in os.walk(folder_path):
+    return total_pages, success_count, fail_count
+
+def process_folder(config, progress_callback=None):
+    """递归扫描文件夹并修复所有PDF文件"""
+    input_folder = config['input_folder']
+    output_folder = config['output_folder']
+    
+    stats = ProcessStats()
+    
+    # 首先统计总文件数
+    stats.total_files = sum(1 for root, _, files in os.walk(input_folder) 
+                     for file in files if file.lower().endswith(".pdf"))
+    
+    for root, _, files in os.walk(input_folder):
         for file in files:
             if file.lower().endswith(".pdf"):
+                # 获取相对路径
+                rel_path = os.path.relpath(root, input_folder)
+                
+                # 构建输入和输出路径
                 input_pdf = os.path.abspath(os.path.join(root, file))
-                output_dir = os.path.abspath(output_folder)
+                output_dir = os.path.abspath(os.path.join(output_folder, rel_path))
                 os.makedirs(output_dir, exist_ok=True)
                 output_pdf = os.path.join(output_dir, file)
-                logging.info(f"正在处理文件: {input_pdf}")
-                correct_pdf_orientation(input_pdf, output_pdf, config)
                 
-                processed_files += 1
+                logging.info(f"正在处理文件: {input_pdf}")
+                total_pages, rotated, failed = correct_pdf_orientation(input_pdf, output_pdf, config)
+                stats.add_file_result(total_pages, rotated, failed)
+                
                 if progress_callback:
-                    progress_callback(processed_files, total_files)
+                    progress_callback(stats.processed_files, stats.total_files)
+    
+    # 输出汇总信息
+    summary = stats.get_summary()
+    logging.info("----------------------------------------")
+    logging.info("处理完成，汇总信息：")
+    logging.info(f"总文件数: {summary['total_files']}")
+    logging.info(f"处理文件数: {summary['processed_files']}")
+    logging.info(f"总页数: {summary['total_pages']}")
+    logging.info(f"旋转页数: {summary['rotated_pages']}")
+    logging.info(f"失败页数: {summary['failed_pages']}")
+    logging.info(f"失败文件数: {summary['failed_files']}")
+    logging.info("----------------------------------------")
+    
+    return stats
 
 def load_config(config_file=None):
     """加载配置文件"""
@@ -325,14 +380,14 @@ if __name__ == "__main__":
         if not config['output_folder']:
             # 修改为与input_folder平级的output目录
             input_parent = os.path.dirname(config['input_folder'])  # 获取input的父目录
-            config['output_folder'] = os.path.join(input_parent, 'output').replace('/', '\\')
+            config['output_folder'] = os.path.join(input_parent, 'output')
         
         if not os.path.exists(config['input_folder']):
             logging.error(f"输入文件夹不存在: {config['input_folder']}")
             sys.exit(1)
         
         os.makedirs(config['output_folder'], exist_ok=True)
-        process_folder(config['input_folder'], config['output_folder'], config)
+        process_folder(config, None)
         logging.info("所有PDF文件已处理完成。")
     else:  # 如果没有命令行参数，启动GUI
         from gui import main

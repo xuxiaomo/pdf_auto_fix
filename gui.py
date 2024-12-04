@@ -265,7 +265,7 @@ class PDFOrientationGUI:
             setup_logging(config['debug'])
             
             # 处理文件夹
-            process_folder(config['input_folder'], config['output_folder'], config, progress_callback)
+            process_folder(config, progress_callback)
             
             logging.info("处理完成！")
         except Exception as e:
