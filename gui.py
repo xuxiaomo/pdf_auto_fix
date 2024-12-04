@@ -1,11 +1,12 @@
-import tkinter as tk
-from tkinter import ttk, filedialog, scrolledtext
-import sys
 import os
-import threading
+import sys
 import queue
 import logging
-import yaml
+import threading
+import tkinter as tk
+from tkinter import ttk, filedialog, scrolledtext
+
+import yaml # PyYAML
 
 class IORedirector(object):
     def __init__(self, text_widget):

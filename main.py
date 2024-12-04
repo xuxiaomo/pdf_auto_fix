@@ -8,9 +8,9 @@ import time
 from threading import Lock
 
 import fitz  # PyMuPDF
-import yaml
-import requests
-from PIL import Image
+import yaml # PyYAML
+import requests # requests
+from PIL import Image # Pillow
 
 
 def setup_logging(debug=False):
@@ -101,9 +101,9 @@ class PDFRotator:
             "handwriting",
             "general_basic",
             "general",
-            "accurate_basic", 
-            "accurate",
-            "webimage",
+            # "accurate_basic", 
+            # "accurate",
+            # "webimage",
         ]
         # 初始化失败计数器字典
         self.api_fail_count = {api: 0 for api in self.available_api_list}
@@ -158,7 +158,11 @@ class PDFRotator:
                 self.available_api_list.remove(api)
                 del self.api_fail_count[api]
         
-        raise Exception("没有可用的OCR接口")
+        if not self.available_api_list:
+            logging.error("没有可用的OCR接口")
+            sys.exit(1)
+        else:
+            raise Exception("所有接口均尝试失败，本页不调整")
 
     def _image_to_base64(self, image):
         buffered = io.BytesIO()

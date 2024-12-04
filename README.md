@@ -1,36 +1,42 @@
 # PDF图片方向自动修正工具
 
-这是一个使用百度OCR API自动检测和修正PDF文件中图片方向的工具。当PDF文件中的图片方向不正确时（如倒置、歪斜等），本工具可以自动将其调整为正确方向。
+这是一个使用百度OCR API自动检测和修正PDF文件中图片方向的工具。当PDF文件中的图片方向不正确时，本工具可以自动将其调整为正确方向。
 
 ## 功能特点
 
-- 自动检测PDF中的图片方向
 - 自动旋转图片到正确方向
 - 批量处理多个PDF文件
-- 保持原PDF文件质量
 
 ## 环境要求
 
-- Python 3.6+
+- Python 3.8+
 - 百度OCR API账号
 
 ## 快速开始
 
 1. 克隆项目到本地
-2. 配置项目：
+2. 安装依赖：
+   ```bash
+   pip install -r requirements.txt
+   ```
+3. 配置项目：
    - 复制配置文件模板：
      ```bash
      cp config.yaml.template config.yaml
      ```
    - 编辑 `config.yaml`，填入你的百度OCR API密钥
 
-3. 使用方法：
+4. 使用方法：
    - 将需要修正的PDF文件放入 `input` 文件夹
    - 运行程序：
      ```bash
      python main.py
      ```
    - 修正后的PDF文件将保存在 `output` 文件夹中
+   - 可选参数：
+     ```bash
+     python main.py --input 自定义输入路径 --output 自定义输出路径
+     ```
 
 ## 配置说明
 
@@ -38,8 +44,8 @@
 
 - `api_key`: 百度OCR API的API Key
 - `secret_key`: 百度OCR API的Secret Key
-- `input_folder`: 输入文件夹路径（默认: ./input）
-- `output_folder`: 输出文件夹路径（默认: ./output）
+- `input_folder`: 输入文件夹路径
+- `output_folder`: 输出文件夹路径
 - `debug`: 调试模式开关（true/false）
 
 ## 注意事项
@@ -57,3 +63,4 @@
 ## 许可证
 
 MIT License
+
